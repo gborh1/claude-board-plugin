@@ -42,19 +42,16 @@ available on request, never volunteered.
 
 **Escalation rule (standing).** Any hard mid-flight decision, any ambiguous
 design call, Planning-mode analysis, and the Phase-6 **done-check** are
-judgment moments: spawn with `model: "opus"` (Opus 5) at maximum reasoning
+judgment moments: spawn with `model: "opus"` at maximum reasoning
 effort. Recon, browsing, and mechanical work stay on Sonnet per the global
 tiering rules. **Hard questions go UP to a fresh max-effort spawn, not out to
 the user.**
 
-**The one exception: the Phase-3 plan runs on `model: "fable"`** (restored
-2026-07-26 — see Phase 3). Everything else above stays on Opus 5: those are
-refutation/correctness tasks judged against a diff, tests, and evidence, where
-Opus 5 is equal to the job at half the price.
+**The Phase-3 plan runs on `model: "opus"` too** (moved off Fable 2026-09-22 —
+see Phase 3). The `opus` alias always resolves to the newest Opus; never pin a
+version.
 
-Escalate to `model: "fable"` elsewhere only when the call is one of *taste*
-rather than correctness — a design/aesthetic judgment, or a product fork where
-both directions are genuinely valid — or when the user asks for Fable by name.
+Use `model: "fable"` only when the user asks for Fable by name.
 
 **Every spawn in this skill names its model; none inherits (owner ruling
 2026-09-05).** A subagent runs on its parent's model unless the spawn says
@@ -64,7 +61,7 @@ Agent tool's `model:` argument (aliases only):
 
 | spawn | `model:` |
 |---|---|
-| Phase-3 plan | `"fable"` |
+| Phase-3 plan | `"opus"` |
 | done-check, every round; mid-flight escalation; Planning-mode analysis | `"opus"` |
 | rules-compliance reviewer (`/code-review`) — pass it on if the skill asks | `"opus"` |
 | recon / codebase search / browser and user-flow walks | `"sonnet"` |
@@ -217,7 +214,7 @@ is stale (what it assumes no longer exists), it was machine-scaffolded and
 the ground has shifted, or executing it would reverse a settled decision.
 Otherwise say nothing and proceed.
 
-## Phase 3 — Plan (Fable is the planner)
+## Phase 3 — Plan
 
 **Right-size first (declared, never asked — owner rule 2026-07-29).** A small
 mechanical shape — one-file bug fix, chore, copy change, no design surface —
@@ -237,8 +234,7 @@ radius; the Brief already knows which kind this is, so let it say so. If
 execution reveals the classification was wrong (the diff grew real surface),
 upgrade to the full path and say so in the ship summary — never the reverse.
 
-Otherwise spawn the **Plan agent with `model: "fable"`** (max reasoning; fall back to
-`opus` only if Fable errors) carrying: the issue, the drift audit, the cascade
+Otherwise spawn the **Plan agent with `model: "opus"`** (max reasoning) carrying: the issue, the drift audit, the cascade
 map. **Tell it the handed ground truth is GIVEN, not hypothesis** (owner
 ruling 2026-08-09): the drift audit's measurements — schema state, live
 behavior, file contents already quoted — are settled; it verifies only what
@@ -250,15 +246,13 @@ must explicitly report: the **blast-radius enumeration** (below), any
 **product fork** (two valid product directions), and any **FLAG** condition
 (triggers in Phase 4).
 
-> **Why Fable here and nowhere else** (restored 2026-07-26 after 3 days on
-> Opus 5). Planning is the one step whose job is navigating ambiguity and
-> deciding next steps — Fable's documented edge — and it is the highest-leverage
-> spawn in the pickup: a weak plan makes every later phase busy but incoherent.
-> It is also cheap to buy, being one spawn against a session of hundreds of
-> messages. Measured from actual usage, Fable ran 11–16% of tokens / 20–27% of
-> blended spend when it held *five* roles; as planner alone expect ~10–15%.
-> **Revert trigger:** if rework doesn't visibly drop over ~10 pickups, the
-> cause was the problem domain, not the model — put Phase 3 back on `opus`.
+> **Why Opus, not Fable** (changed 2026-09-22; Fable planned here from
+> 2026-07-26). Opus 5.5 beats Fable 5.1 on every benchmark Anthropic published,
+> at 40% of the price, and Anthropic's guidance is to start on Opus and reach
+> for Fable only when your own evals show Opus falling short. The plan is still
+> the highest-leverage spawn in the pickup, so it runs at max reasoning.
+> **Revert trigger:** if plans visibly degrade over ~10 pickups (more rework,
+> missed blast radius), put Phase 3 back on `fable`.
 
 ### The blast-radius enumeration (required section, usually empty)
 
@@ -455,7 +449,7 @@ Implement the plan; write tests per testing-standards.
    step 0).
 4. **Done-check (adversarial completion recheck) — after review findings are
    fixed, before `/commit`.** Spawn a fresh agent per the escalation rule
-   (`model: "opus"`, Opus 5 at max reasoning) charged to **refute the
+   (`model: "opus"`, max reasoning) charged to **refute the
    claim that this issue is done**. It exists to catch the class of error a
    diff review cannot: ACs satisfied in letter but not spirit, verification
    that exercises something *adjacent* to the claimed fix rather than the fix
@@ -704,10 +698,9 @@ The deliverable is a **decision**, not code. Claim first exactly as Phase 1.1
 gates. If you exit without spawning execution issues or amending the issue,
 release the claim per *Releasing a claim*.
 
-1. Delegate the analysis per the escalation rule (Opus 5, max reasoning):
+1. Delegate the analysis per the escalation rule (Opus, max reasoning):
    landscape, options, consequences, a recommendation — product altitude
-   throughout. If the decision turns on taste rather than correctness, that
-   is the Fable case.
+   throughout.
 2. Walk it through with the user. This mode is a conversation: short turns,
    consequences only, weeds on request.
 3. Exit one of three ways (the user picks):

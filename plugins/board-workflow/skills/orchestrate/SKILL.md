@@ -69,12 +69,6 @@ straight to `main`, then `main` is production: you open PRs and stop, and the ow
 Get one confirmation. Then run without further gating except escalations and check-ins. If the
 owner has already said "go" in substance, do not re-ask — state the mandate and proceed.
 
-**If this session runs on Fable, run `/advisor` off before the first dispatch** (owner ruling
-2026-09-05). The advisor is Fable and re-reads the whole context uncached on every call; on a
-Fable orchestrator that is Fable reviewing Fable — double spend for nothing. Build agents keep
-their advisor: they run on Opus, and a Fable second opinion over an Opus builder is the one
-ambient Fable role the tiering rules keep.
-
 **If the scope has no issues filed yet:** file them first (follow the project's issue conventions
 — in this environment, `${CLAUDE_PLUGIN_ROOT}/skills/conventions/issue-management.md` and `/create-issue`), present the
 list as part of the mandate, then dispatch.
@@ -89,17 +83,17 @@ These live for the whole run. Spawn them once; reuse them.
 defect** (owner ruling 2026-09-05). A subagent inherits its parent's model unless the spawn says
 otherwise, and inheritance chains: run this skill on Fable and one unnamed spawn makes the builder
 Fable, and every subagent the builder forgets to name Fable too. The `model` values below are the
-literal `model:` argument on the Agent tool — aliases only (`sonnet | opus | fable`), which is why
-`ANTHROPIC_DEFAULT_OPUS_MODEL` pins what `opus` means. Fable is reserved for this session's own
-reasoning and for the spawns a skill asks for by name (the Planner here; `/pickup` Phase 3 inside a
-builder, which pins `model: "fable"` itself and therefore stays Fable whoever dispatched it).
+literal `model:` argument on the Agent tool — aliases only (`sonnet | opus | fable`). `opus` always
+resolves to the newest Opus; never pin a version (no `ANTHROPIC_DEFAULT_OPUS_MODEL`). Fable runs only
+when the owner asks for it by name (changed 2026-09-22: Opus 5.5 outscores Fable 5.1 at 40% of the
+price).
 
 | Agent | Count | `model:` | Job |
 |---|---|---|---|
 | **Board agent** | 1 | `"sonnet"` | Owns **all** board mutations — status flips, comments, new issues, checklist ticks. Nothing else touches the board. Keeps board bookkeeping out of your context and board state consistent. Retrieval-and-mutation work; Sonnet. |
 | **Reviewers** | 2–3 | `"opus"` | Persistent for the whole run. Reused across PRs so they accumulate cross-PR knowledge. This is what catches "PR A's rebase deletes PR B's exports." |
-| **Planner** | 0–1, on demand | `"fable"` | Only for genuinely ambiguous issues — writes the dispatch brief or the approach. One spawn, not a stream. Skip entirely for well-specified issues. |
-| **Build agents** | 1 per issue, per wave | `"opus"` | Phase 2. Each one runs `/pickup`, which does its own tiering underneath (Fable for the plan, Opus for the done-check, Sonnet for recon). |
+| **Planner** | 0–1, on demand | `"opus"` | Only for genuinely ambiguous issues — writes the dispatch brief or the approach. One spawn, not a stream. Skip entirely for well-specified issues. |
+| **Build agents** | 1 per issue, per wave | `"opus"` | Phase 2. Each one runs `/pickup`, which does its own tiering underneath (Opus for the plan and done-check, Sonnet for recon). |
 
 Do not spawn reviewers per PR and tear them down. A reviewer that forgets is worth far less than
 one that remembers.
