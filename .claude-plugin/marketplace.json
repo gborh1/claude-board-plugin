@@ -8,7 +8,7 @@
       "name": "board-workflow",
       "source": "./plugins/board-workflow",
       "description": "Board-driven development lifecycle: /pickup, /board, /create-issue, /orchestrate, /rename-session, plus the issue, testing and migration conventions they cite.",
-      "version": "1.1.1",
+      "version": "1.1.2",
       "displayName": "Board workflow"
     }
   ]

@@ -341,5 +341,161 @@ class NothingAvailableReport(unittest.TestCase):
         self.assertIn("epic #200 blocked by unshipped issue #101", out)
 
 
+class SelfDependentEpic(unittest.TestCase):
+    """#1045 — an epic whose Depends-on names its OWN member must not deadlock.
+
+    Before the fix the epic was skipped whole until the member shipped, and the
+    member could not reach the tail because the live epic still claimed it, so
+    /pickup said NOTHING AVAILABLE with no hint the blocker was inside.
+    """
+
+    def _board(self, extra=()):
+        return [item(200, "Epic: Self-gated", "Todo", rank=10),
+                item(201, "Member named by the gate", "Todo"),
+                item(202, "Other member", "Todo")] + list(extra)
+
+    def _bodies(self, dep_line, extra=None):
+        out = {200: body(200, f"### Connections\n{dep_line}\n\n"
+                              "- [ ] #201 — first\n- [ ] #202 — second"),
+               201: body(201, "Parent: #200"),
+               202: body(202, "Parent: #200")}
+        out.update(extra or {})
+        return out
+
+    def test_self_dependency_does_not_deadlock_the_epic(self):
+        # THE RED TEST: before #1045 this printed NOTHING AVAILABLE.
+        out = run(self._board(), self._bodies("Depends-on: #201 — do it first"))
+        self.assertNotIn("NOTHING AVAILABLE", out)
+        self.assertNotIn("waits on issue #201", out)
+        self.assertIn("NEXT → #201", out)
+
+    def test_other_members_stay_reachable(self):
+        # AC3: with the named member in flight, the rest of the epic is offered.
+        board = [item(200, "Epic: Self-gated", "Todo", rank=10),
+                 item(201, "Member named by the gate", "In Progress", dev="Amy"),
+                 item(202, "Other member", "Todo")]
+        out = run(board, self._bodies("Depends-on: #201 — do it first"))
+        self.assertIn("NEXT → #202", out)
+
+    def test_warning_names_the_epic_and_the_member(self):
+        # AC1 + AC2, on the default report.
+        out = run(self._board(), self._bodies("Depends-on: #201 — do it first"))
+        self.assertIn("SELF-DEPENDENCIES", out)
+        self.assertIn("epic #200 depends on its own member #201", out)
+
+    def test_board_view_flags_it_as_a_hygiene_defect(self):
+        out = run(self._board(), self._bodies("Depends-on: #201 — do it first"),
+                  argv=["--board"])
+        self.assertIn("epic #200 depends on its own member #201", out)
+        self.assertNotIn("⛔", out)
+
+    def test_dependency_on_itself_is_also_caught(self):
+        out = run(self._board(), self._bodies("Depends-on: #200 — typo"))
+        self.assertIn("epic #200 depends on itself", out)
+        self.assertIn("NEXT → #201", out)
+
+    def test_dependency_on_a_member_of_a_sub_epic_is_caught(self):
+        # The member sits one level down: #200 → sub-epic #210 → #211.
+        board = self._board([item(210, "Epic: Sub", "Todo", rank=1),
+                             item(211, "Grandchild", "Todo")])
+        bodies = self._bodies("Depends-on: #211 — deep",
+                              {210: body(210, "Parent: #200\n\n- [ ] #211 — gc"),
+                               211: body(211, "Parent: #210")})
+        out = run(board, bodies)
+        self.assertIn("epic #200 depends on its own member #211", out)
+        self.assertNotIn("NOTHING AVAILABLE", out)
+        self.assertIn("NEXT → #211", out)
+
+    def test_dependency_on_its_own_sub_epic_is_caught(self):
+        board = self._board([item(210, "Epic: Sub", "Todo", rank=1),
+                             item(211, "Grandchild", "Todo")])
+        bodies = self._bodies("Depends-on: #210 — sub first",
+                              {210: body(210, "Parent: #200\n\n- [ ] #211 — gc"),
+                               211: body(211, "Parent: #210")})
+        out = run(board, bodies)
+        self.assertIn("epic #200 depends on its own member #210", out)
+        self.assertNotIn("waits on epic #210", out)
+
+    def test_real_dependency_alongside_a_self_dependency_still_gates(self):
+        # Ignoring the self-edge must not open a genuine gate, and the genuine
+        # gate must not hide the defect warning.
+        board = self._board([item(101, "Real blocker", "In Progress", dev="Beau")])
+        bodies = self._bodies("Depends-on: #101 — real\nDepends-on: #201 — self",
+                              {101: body(101, "standalone")})
+        out = run(board, bodies)
+        self.assertIn("epic #200 blocked by unshipped issue #101", out)
+        self.assertIn("epic #200 depends on its own member #201", out)
+
+    def test_sibling_dependency_of_a_sub_epic_is_not_a_self_dependency(self):
+        # Sub-epic #210 waiting on #201, a member of its PARENT, is an ordinary
+        # cross-epic edge, not a self-dependency, and must keep gating.
+        board = self._board([item(210, "Epic: Sub", "Todo", rank=1),
+                             item(211, "Grandchild", "Todo")])
+        bodies = self._bodies("",
+                              {210: body(210, "Parent: #200\nDepends-on: #201 — x"
+                                              "\n\n- [ ] #211 — gc"),
+                               211: body(211, "Parent: #210")})
+        out = run(board, bodies)
+        self.assertNotIn("SELF-DEPENDENCIES", out)
+        self.assertIn("epic #210 — waits on issue #201", out)
+
+    # --- the mirror direction: the dependency CONTAINS the dependent ---------
+
+    def test_sub_epic_waiting_on_its_parent_epic_is_caught(self):
+        # #200's member set includes sub-epic #210, which can only finish once
+        # #211 ships — and #211 is behind #210's gate. Before the fix this was
+        # a silent NOTHING AVAILABLE, and closing #200 (as --board suggested)
+        # made #211 vanish instead of freeing it.
+        board = [item(200, "Epic: Parent", "Todo", rank=10),
+                 item(201, "Shipped member", "Done"),
+                 item(210, "Epic: Sub", "Todo", rank=1),
+                 item(211, "Grandchild", "Todo")]
+        bodies = {200: body(200, "- [ ] #201 — a\n- [ ] #210 — sub"),
+                  201: body(201, "Parent: #200"),
+                  210: body(210, "Parent: #200\nDepends-on: #200 — up\n\n- [ ] #211 — gc"),
+                  211: body(211, "Parent: #210")}
+        out = run(board, bodies)
+        self.assertIn("epic #210 depends on its own parent epic #200", out)
+        self.assertNotIn("NOTHING AVAILABLE", out)
+        self.assertIn("NEXT → #211", out)
+
+    def test_issue_waiting_on_its_own_epic_is_caught(self):
+        out = run(self._board(), {200: body(200, "- [ ] #201 — a\n- [ ] #202 — b"),
+                                  201: body(201, "Parent: #200\nDepends-on: #200 — x"),
+                                  202: body(202, "Parent: #200")})
+        self.assertIn("#201 depends on its own parent epic #200", out)
+        self.assertIn("NEXT → #201", out)
+        self.assertNotIn("waits on #200", out)
+
+    def test_child_defect_is_reported_while_the_parent_is_gated(self):
+        # The defect pass runs over every live item, not only walked epics, so
+        # a parent's real blocker cannot hide a sub-epic's self-dependency.
+        board = [item(200, "Epic: Gated parent", "Todo", rank=10),
+                 item(101, "Real blocker", "In Progress", dev="Beau"),
+                 item(210, "Epic: Sub", "Todo", rank=1),
+                 item(211, "Grandchild", "Todo")]
+        bodies = {200: body(200, "Depends-on: #101 — real\n\n- [ ] #210 — sub"),
+                  101: body(101, "standalone"),
+                  210: body(210, "Parent: #200\nDepends-on: #211 — self\n\n- [ ] #211 — gc"),
+                  211: body(211, "Parent: #210")}
+        out = run(board, bodies)
+        self.assertIn("epic #210 depends on its own member #211", out)
+        self.assertIn("epic #200 blocked by unshipped issue #101", out)
+
+    def test_member_of_a_dead_sub_epic_is_still_a_real_gate(self):
+        # A dead sub-epic releases its members to the tail, where they can
+        # ship, so an edge to one of them clears and must keep gating.
+        board = self._board([item(210, "Epic: Dead sub", "Done", rank=1),
+                             item(211, "Released grandchild", "Todo")])
+        bodies = self._bodies("Depends-on: #211 — real",
+                              {210: body(210, "Parent: #200\n\n- [ ] #211 — gc",
+                                         state="CLOSED"),
+                               211: body(211, "Parent: #210")})
+        out = run(board, bodies)
+        self.assertNotIn("SELF-DEPENDENCIES", out)
+        self.assertIn("epic #200 — waits on issue #211", out)
+        self.assertIn("NEXT → #211", out)
+
+
 if __name__ == "__main__":
     unittest.main()

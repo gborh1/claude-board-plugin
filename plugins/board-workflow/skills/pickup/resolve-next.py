@@ -12,6 +12,11 @@ the conventions skill, issue-management.md (Priority & Devs):
     item of #E has shipped; when the dep is an ISSUE rather than an epic the
     edge gates on that one issue shipping (the epic-only reading made every
     epic→issue edge a silent no-op — #877's freshness gate, #948, 2026-07-25)
+  - a `Depends-on` between an item and something that contains it or that it
+    contains (an epic on itself or its own member, a sub-epic on an epic above
+    it, an issue on its own epic) would deadlock: the gate hides the only work
+    that can clear it. That edge is IGNORED as a gate and reported LOUDLY as a
+    creation defect (#1045)
   - a CLOSED (or board-Done) epic is DEAD: never walked, and its leftover
     checklist lines claim nothing — otherwise a ghost epic smuggles re-homed
     issues into the walk at its old rank position (the #148 incident, 2026-07-16)
@@ -633,8 +638,17 @@ def render_list(items, top_epics, epic_children, shipped):
             print(f"| {label if i == 0 else ''} | {num} | {ttl} | {st} |")
 
 
+def self_dep_text(items, src, dep, rel):
+    """One phrasing for a containment edge (#1045), shared by both renderers."""
+    who = f"epic #{src}" if items[src]["is_epic"] else f"#{src}"
+    what = {"itself": "itself",
+            "member": f"its own member #{dep}",
+            "parent": f"its own parent epic #{dep}"}[rel]
+    return f"{who} depends on {what}"
+
+
 def render_board_view(items, walk, blocked_epics, busy, free, repo,
-                      epic_children, shipped, epic_of, top_epics):
+                      epic_children, shipped, epic_of, top_epics, self_deps=()):
     """--board: the priority-board display. Same graph, second renderer."""
     from datetime import date
     blocked_map = dict(blocked_epics)          # epic -> (blocker, kind)
@@ -789,6 +803,8 @@ def render_board_view(items, walk, blocked_epics, busy, free, repo,
     if unranked:
         notes.append(f"unranked epics (INVISIBLE to /pickup): "
                      + ", ".join(f"#{x}" for x in unranked))
+    for src, dep, rel in self_deps:
+        notes.append(f"{self_dep_text(items, src, dep, rel)} (edge ignored — remove it)")
     if unstatused:
         notes.append(f"{len(unstatused)} board items with no Status")
     if tail:
@@ -892,6 +908,59 @@ def main():
                 ks.add(k)
         return ks
 
+    def descendants(epic_n, seen=None):
+        """Every member of epic_n, recursing into its LIVE sub-epics (which
+        count as members too). A dead sub-epic releases its members (they fall
+        to the tail and can ship), so an edge to them stays a real gate.
+        Cycle-safe: a malformed board can parent epics in a loop."""
+        seen = set() if seen is None else seen
+        out = set()
+        for k in set(epic_children(epic_n)) | member_kids(epic_n):
+            if k in out:
+                continue
+            out.add(k)
+            if k in items and items[k]["is_epic"] and k not in seen \
+                    and not epic_dead(k):
+                seen.add(k)
+                out |= descendants(k, seen)
+        return out
+
+    # #1045 — CONTAINMENT edges. A Depends-on between an item and something
+    # that contains it, or that it contains, can never clear: the gate hides
+    # the very work it waits on, and a live epic's claim keeps that work out of
+    # the tail too. Three shapes, all one class:
+    #   - an epic waiting on itself or on its own member (at any depth)
+    #   - a sub-epic waiting on an epic above it
+    #   - an issue waiting on an epic it belongs to
+    # Such an edge is IGNORED as a gate and reported as a creation defect.
+    # Computed once over every live item, not as a side effect of the walk, so
+    # a parent's real blocker cannot hide a child's defect.
+    def self_edge(src, dep):
+        if dep == src:
+            return "itself"
+        if items[src]["is_epic"] and dep in descendants(src, {src}):
+            return "member"
+        if dep in items and items[dep]["is_epic"] and not epic_dead(dep) \
+                and src in descendants(dep, {dep}):
+            return "parent"
+        return None
+
+    self_deps = []       # (src, dep, "itself"|"member"|"parent")
+    for n in sorted(items):
+        it = items[n]
+        if it["is_epic"] and epic_dead(n):
+            continue
+        if not it["is_epic"] and it["status"] not in PICKABLE_STATES:
+            continue
+        for dep in it["depends"]:
+            rel = self_edge(n, dep)
+            if rel and (n, dep, rel) not in self_deps:
+                self_deps.append((n, dep, rel))
+    self_dep_pairs = {(n, d) for n, d, _ in self_deps}
+
+    def gating_deps(n):
+        return [d for d in items[n]["depends"] if (n, d) not in self_dep_pairs]
+
     def epic_blocked(epic_n):
         """epic-level Depends-on. A dep EPIC gates until every one of its items
         has shipped; a dep ISSUE gates until it itself has shipped. Returns
@@ -906,7 +975,7 @@ def main():
         (owner call, #948: honouring them would let a board-Done-but-open epic
         wedge every epic behind it shut, since the board query drops Done).
         """
-        for dep in items[epic_n]["depends"]:
+        for dep in gating_deps(epic_n):   # containment edges skipped (#1045)
             if dep in items and items[dep]["is_epic"]:
                 kids = member_kids(dep)
                 if kids and not all(shipped(k) for k in kids):
@@ -922,7 +991,7 @@ def main():
             return False
         if it["rider_of"] is not None:
             return False
-        return all(shipped(d) for d in it["depends"])
+        return all(shipped(d) for d in gating_deps(n))
 
     def order_children(epic_n, kids):
         checklist = items[epic_n]["checklist"]
@@ -1054,7 +1123,7 @@ def main():
     # --- board view (--board): same graph, different renderer ---
     if "--board" in sys.argv:
         render_board_view(items, walk, blocked_epics, busy, free, repo,
-                          epic_children, shipped, epic_of, top_epics)
+                          epic_children, shipped, epic_of, top_epics, self_deps)
         return
 
     # --- report ---
@@ -1072,6 +1141,13 @@ def main():
             print(f"    #{n}  {items[n]['title']}")
         print()
 
+    if self_deps:
+        print("⚠ SELF-DEPENDENCIES (creation defect — each edge would deadlock "
+              "its own epic, so it is IGNORED as a gate; remove it from the body):")
+        for src, dep, rel in self_deps:
+            print(f"    {self_dep_text(items, src, dep, rel)}")
+        print()
+
     if not free:
         print("All devs busy. Per the rules, print who's on what and stop.")
         return
@@ -1084,7 +1160,7 @@ def main():
         for n, it in sorted(items.items()):
             if it["status"] in PICKABLE_STATES and not it["is_epic"] \
                and it["rider_of"] is None:
-                un = [d for d in it["depends"] if not shipped(d)]
+                un = [d for d in gating_deps(n) if not shipped(d)]
                 if un:
                     print(f"  #{n} waits on " + ", ".join(f"#{d}" for d in un))
         return
@@ -1165,7 +1241,7 @@ def main():
     for n, it in sorted(items.items()):
         if it["status"] in PICKABLE_STATES and not it["is_epic"] \
            and it["rider_of"] is None:
-            un = [d for d in it["depends"] if not shipped(d)]
+            un = [d for d in gating_deps(n) if not shipped(d)]
             if un:
                 waiting.append((n, un))
     if waiting or blocked_epics:
