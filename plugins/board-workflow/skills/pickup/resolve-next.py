@@ -4,7 +4,7 @@ resolve-next.py — deterministic /pickup Phase-0 resolver.
 
 Does the "which issue is next?" walk in ONE pass instead of a dozen sequential
 gh calls + in-context graph reasoning. Encodes the scheduler paradigm from
-the conventions skill, issue-management.md (Priority & Devs):
+~/.claude/rules/issue-management.md (Priority & Devs):
 
   - walk top-level epics by Epic Rank ascending (lower first), recursing into
     sub-epics in their local rank order
@@ -39,7 +39,11 @@ Generic across repos — NO hardcoded board. Board coordinates resolve in order:
   4. parse the repo's docs (CLAUDE.md / .claude/rules/issue-management.md) for
      the documented `gh project item-list <N> --owner <owner>` command
 The repo for issue bodies is derived from the board's own `.repository` field,
-so the same script works unchanged in any repo that uses this paradigm.
+PER ITEM, so a board that mixes repos (jayro-frontend + jayro-backend on one
+org project) reads each issue's body from the repo it actually lives in. A
+single-repo board behaves exactly as before. Off-board lookups (a `Depends-on`
+that isn't on the board) resolve against the PRIMARY repo: the current
+checkout's `origin` if it appears on the board, else the first item's repo.
 """
 import json
 import os
@@ -497,6 +501,32 @@ def _rows_from_graphql(nodes):
     return items
 
 
+def repo_slug(url):
+    """'https://github.com/o/r' (or 'o/r') -> 'o/r'; None if missing."""
+    if not url:
+        return None
+    return "/".join(url.rstrip("/").split("/")[-2:])
+
+
+def board_repos(board):
+    """(primary_repo, [every repo on the board]) — primary is the current
+    checkout's origin when it is one of the board's repos, else the first
+    item's repo (the pre-multi-repo behaviour)."""
+    repos = []
+    for it in board:
+        r = repo_slug(it.get("repository"))
+        if r and r not in repos:
+            repos.append(r)
+    if not repos:
+        return None, []
+    origin = subprocess.run(["git", "remote", "get-url", "origin"],
+                            capture_output=True, text=True).stdout.strip()
+    m = re.search(r"github\.com[:/]([\w.-]+/[\w.-]+?)(?:\.git)?$", origin)
+    cur = m.group(1) if m else None
+    primary = cur if cur in repos else repos[0]
+    return primary, repos
+
+
 def load_bodies(repo):
     # state=all so closed/Done children still carry their `Parent:` line —
     # needed for accurate per-epic progress (shipped/total) in --board mode.
@@ -829,12 +859,20 @@ def main():
                  f"once to refresh the id-map, or #{n} isn't on the board.")
 
     board = load_board()
-    repo_url = next((it.get("repository") for it in board if it.get("repository")), None)
-    if not repo_url:
+    # One board may span several repos (per-item `.repository`). Load bodies
+    # per repo so a backend issue is never read as the same-numbered frontend
+    # issue. `repo` (primary) stays the single name every downstream print and
+    # off-board lookup already uses.
+    repo, repos = board_repos(board)
+    if not repo:
         print("ERROR: could not determine repo from board.", file=sys.stderr)
         sys.exit(1)
-    repo = "/".join(repo_url.rstrip("/").split("/")[-2:])
-    bodies = load_bodies(repo)
+    bodies_by_repo = {r: load_bodies(r) for r in repos}
+    bodies = dict(bodies_by_repo.get(repo) or {})   # primary wins on collision
+    for r, bs in bodies_by_repo.items():
+        if r != repo:
+            for n, v in bs.items():
+                bodies.setdefault(n, v)
 
     # --- build the item map (issues only; drop PRs/drafts) ---
     items = {}
@@ -845,7 +883,13 @@ def main():
         n = c["number"]
         rank = it.get("epic Rank")
         title = c.get("title", "")
-        raw_body = (bodies.get(n) or {}).get("body", "")
+        item_repo = repo_slug(it.get("repository")) or repo
+        if n in items and items[n].get("repo") != item_repo:
+            print(f"WARN: #{n} exists in both {items[n].get('repo')} and "
+                  f"{item_repo}; the walk keys by number and keeps the first.",
+                  file=sys.stderr)
+            continue
+        raw_body = ((bodies_by_repo.get(item_repo) or {}).get(n) or {}).get("body", "")
         conn = parse_body(raw_body)
         items[n] = {
             "number": n,
@@ -855,6 +899,7 @@ def main():
             # is the single most expensive GraphQL call in the flow (~400 pts per
             # 100-item page); reusing this id removes 1–2 redundant pulls/pickup.
             "item_id": it.get("id"),
+            "repo": item_repo,
             "title": title,
             "status": it.get("status"),
             "module": it.get("module"),
